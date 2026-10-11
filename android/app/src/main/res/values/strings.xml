@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZCode 连接</string>
+
+    <string name="title_manage">连接地址</string>
+    <string name="subtitle_none">未设置</string>
+    <string name="subtitle_connected">已连接 %1$s</string>
+
+    <string name="empty_title">还没有连接地址</string>
+    <string name="empty_desc">在电脑端 ZCode 开启「手机远控」，把连接地址粘贴进来即可。地址变了就换一条，历史记录会保留。</string>
+    <string name="empty_action">设置连接地址</string>
+
+    <string name="sheet_title">连接地址</string>
+    <string name="sheet_desc">从 ZCode 复制连接地址后粘贴到下面。每次地址变化，粘贴新的一条即可。</string>
+    <string name="sheet_hint">https://zcode.z.ai/remote/v4?sid=…&amp;hash=…</string>
+    <string name="action_paste">粘贴</string>
+    <string name="action_save_connect">保存并连接</string>
+    <string name="saved_title">已保存的地址</string>
+    <string name="saved_empty">暂无保存的地址</string>
+    <string name="action_delete">删除</string>
+
+    <string name="err_empty">请先粘贴连接地址</string>
+    <string name="err_not_zcode">这不是 ZCode 连接地址（需要 zcode.z.ai/remote/… 且包含 sid 与 hash）</string>
+    <string name="err_missing_params">地址缺少必需参数（sid / hash）</string>
+    <string name="err_clipboard_empty">剪贴板里没有文本</string>
+
+    <string name="menu_address">连接地址</string>
+    <string name="menu_reload">刷新</string>
+    <string name="menu_copy">复制链接</string>
+
+    <string name="toast_copied">已复制连接地址</string>
+    <string name="toast_pasted">已粘贴剪贴板内容</string>
+    <string name="toast_saved">已保存并连接</string>
+    <string name="toast_deleted">已删除</string>
+    <string name="toast_no_address">还没有连接地址</string>
+
+    <string name="load_failed">页面加载失败，请检查网络或地址是否仍然有效。</string>
+    <string name="action_retry">重试</string>
+    <string name="action_reenter">更换地址</string>
+
+    <string name="cd_launcher">应用图标</string>
+</resources>

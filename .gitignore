@@ -1,0 +1,20 @@
+# 运行时数据（含连接签名，不要提交 / 分享）
+data/links.json
+data/*.tmp
+
+# Android 构建产物与本地签名
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore.properties
+android/*.jks
+android/.idea/
+
+# 临时文件（asar 解包、模拟器截图等）
+.tmp/
+
+node_modules/
+npm-debug.log*
+.DS_Store
+Thumbs.db

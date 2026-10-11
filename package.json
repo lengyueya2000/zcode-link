@@ -1,0 +1,14 @@
+{
+  "name": "zcode-mobile-link",
+  "version": "1.0.0",
+  "private": true,
+  "description": "本地工具：把 ZCode 手机端连接链接转成二维码，并跟踪会变化的连接地址",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:open": "node server.js --open"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- 三个定位角 -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M22,22h26v26h-26zM60,22h26v26h-26zM22,60h26v26h-26z" />
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M29,29h12v12h-12zM67,29h12v12h-12zM29,67h12v12h-12z" />
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M35,35h0.1v0.1h-0.1zM73,35h0.1v0.1h-0.1zM35,73h0.1v0.1h-0.1z" />
+
+    <!-- 右下角数据点 -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M60,60h9v9h-9zM73,60h9v9h-9zM60,73h9v9h-9zM73,73h9v9h-9z" />
+</vector>

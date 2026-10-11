@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>ZCode 手机连接助手</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2322C55E' stroke-width='2'%3E%3Crect x='3' y='3' width='7' height='7' rx='1'/%3E%3Crect x='14' y='3' width='7' height='7' rx='1'/%3E%3Crect x='3' y='14' width='7' height='7' rx='1'/%3E%3Cpath d='M14 14h3v3h-3zM20 14h1M14 20h3M20 17v4'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<a class="skip-link" href="#linkInput">跳到链接输入框</a>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+      <path d="M14 14h3v3h-3zM20.5 14v.5M14 20.5h3M20.5 18v3" />
+    </svg>
+    <div class="brand-text">
+      <h1>ZCode 手机连接助手</h1>
+      <p>把会变化的连接地址变成手机可扫的二维码</p>
+    </div>
+  </div>
+  <div class="device-chip" id="deviceChip" title="本机在 ZCode 中注册的远程设备">
+    <span class="dot" id="chipDot" aria-hidden="true"></span>
+    <span class="chip-label">本机设备</span>
+    <code id="chipSid">读取中…</code>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- 左列 -->
+  <div class="col-main">
+
+    <section class="card" aria-labelledby="h-link">
+      <div class="card-head">
+        <h2 id="h-link">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>
+          连接链接
+        </h2>
+        <span class="hint">地址会变？重新粘贴一次即可</span>
+      </div>
+
+      <label class="field-label" for="linkInput">ZCode 手机端连接地址</label>
+      <textarea id="linkInput" rows="3" spellcheck="false" autocomplete="off"
+        placeholder="https://zcode.z.ai/remote/v4?sid=…&hash=…&t=…&mid=…&name=PC01&app_version=…"></textarea>
+
+      <div class="actions">
+        <button type="button" class="btn primary" id="btnGenerate">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20.5 14v.5M14 20.5h3M20.5 18v3"/></svg>
+          生成二维码
+        </button>
+        <button type="button" class="btn" id="btnClipboard">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
+          读取剪贴板
+        </button>
+        <button type="button" class="btn ghost" id="btnClear">清空</button>
+      </div>
+
+      <label class="switch" for="watchClip">
+        <input type="checkbox" id="watchClip" />
+        <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        <span>自动监听剪贴板：ZCode 复制新地址后自动更新二维码</span>
+      </label>
+
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="h-device">
+      <div class="card-head">
+        <h2 id="h-device">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+          本机设备
+        </h2>
+        <button type="button" class="btn ghost small" id="btnRefreshDevice">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>
+          刷新
+        </button>
+      </div>
+      <dl class="kv" id="deviceInfo">
+        <div><dt>设备 SID</dt><dd class="mono" id="dSid">—</dd></div>
+        <div><dt>计算机名</dt><dd class="mono" id="dHost">—</dd></div>
+        <div><dt>最近启用</dt><dd class="mono" id="dContext">—</dd></div>
+        <div><dt>配置文件</dt><dd class="mono" id="dPath">—</dd></div>
+        <div><dt>配置更新时间</dt><dd class="mono" id="dMtime">—</dd></div>
+      </dl>
+      <p class="note" id="deviceNote"></p>
+    </section>
+
+    <section class="card" aria-labelledby="h-detail">
+      <div class="card-head">
+        <h2 id="h-detail">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
+          链接详情
+        </h2>
+        <span class="hint" id="detailState">尚未解析</span>
+      </div>
+      <dl class="kv" id="linkDetail">
+        <div><dt>sid</dt><dd class="mono" id="pSid">—</dd></div>
+        <div><dt>name</dt><dd class="mono" id="pName">—</dd></div>
+        <div><dt>mid</dt><dd class="mono" id="pMid">—</dd></div>
+        <div><dt>app_version</dt><dd class="mono" id="pVer">—</dd></div>
+        <div><dt>t（生成时间）</dt><dd class="mono" id="pT">—</dd></div>
+        <div><dt>hash</dt><dd class="mono" id="pHash">—</dd></div>
+        <div><dt>host / path</dt><dd class="mono" id="pHost">—</dd></div>
+      </dl>
+      <p class="note" id="detailNote"></p>
+    </section>
+
+    <section class="card" aria-labelledby="h-history">
+      <div class="card-head">
+        <h2 id="h-history">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
+          历史记录
+        </h2>
+        <span class="hint" id="histCount">0 条</span>
+      </div>
+      <ul class="history" id="historyList"></ul>
+      <p class="note" id="histNote">本机保存，最多 50 条。链接含签名，请勿分享 <code>data/links.json</code>。</p>
+    </section>
+
+  </div>
+
+  <!-- 右列 -->
+  <aside class="col-side">
+    <section class="card qr-card" aria-labelledby="h-qr">
+      <div class="card-head">
+        <h2 id="h-qr">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20.5 14v.5M14 20.5h3M20.5 18v3"/></svg>
+          手机扫码
+        </h2>
+      </div>
+
+      <div class="qr-stage" id="qrStage">
+        <canvas id="qrCanvas" width="288" height="288" aria-label="连接链接二维码"></canvas>
+        <div class="qr-empty" id="qrEmpty">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/></svg>
+          <p>粘贴链接后点「生成二维码」</p>
+        </div>
+      </div>
+
+      <div class="qr-controls">
+        <label class="field-label" for="qrSize">尺寸 <output id="qrSizeOut">288</output>px</label>
+        <input type="range" id="qrSize" min="180" max="480" step="4" value="288" />
+        <label class="field-label" for="qrEc">容错级别</label>
+        <select id="qrEc">
+          <option value="L">L — 7%</option>
+          <option value="M" selected>M — 15%</option>
+          <option value="Q">Q — 25%</option>
+          <option value="H">H — 30%</option>
+        </select>
+      </div>
+
+      <div class="qr-actions">
+        <button type="button" class="btn" id="btnDownload" disabled>
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          下载 PNG
+        </button>
+        <button type="button" class="btn" id="btnCopy" disabled>
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
+          复制链接
+        </button>
+        <button type="button" class="btn ghost" id="btnPrint" disabled>打印</button>
+      </div>
+      <p class="note">二维码在浏览器本地生成，链接不会发往任何外部服务。</p>
+    </section>
+  </aside>
+</main>
+
+<footer class="foot">
+  <span>本地运行 · 仅监听 127.0.0.1 · 无第三方依赖</span>
+</footer>
+
+<script src="./vendor/qrcode.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
