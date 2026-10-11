@@ -78,7 +78,7 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 ## 安全说明
 
 - 连接地址里的 `hash` 是连接凭据，本应用只把它发往 `zcode.z.ai`，不写入日志、不发给任何第三方。
-- WebView 关闭了本地文件访问（`allowFileAccess=false`、`allowContentAccess=false`）。网页内容无法调用原生能力，只有一个例外：`ZcDownload` 这个 JS 接口，仅用于把 blob/data 下载的字节交回应用写文件；它会校验当前页面确实来自 `zcode.z.ai`、清洗文件名、并限制大小（约 48 MB）。
+- WebView 关闭了本地文件访问（`allowFileAccess=false`、`allowContentAccess=false`）。网页内容无法调用原生能力，只有一个例外：`ZcDownload` 这个 JS 接口，仅用于把 blob/data 下载的内容交回应用写文件；它会校验当前页面确实来自 `zcode.z.ai`、清洗文件名、并限制大小（16 MB）。
 - 下载文件由应用直接写入系统「下载」目录（Android 10+ 走 MediaStore），不额外申请存储权限。
 - 混合内容禁止（`MIXED_CONTENT_NEVER_ALLOW`），证书异常一律拒绝，不提供绕过入口。
 - 仅声明 `INTERNET` 与 `ACCESS_NETWORK_STATE` 权限；`allowBackup=false`，应用数据（含地址历史）不参与云备份。
@@ -92,5 +92,5 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 ## 已知限制
 
 - 必须联网；连接地址失效时网页客户端会提示「手机连接已失效」，此时回到电脑端重新生成地址再粘贴即可。
-- blob/data 形式的下载需要先把内容读进内存，超过约 48 MB 会提示失败；http(s) 下载没有这个限制。
+- blob/data 形式的下载需要先把内容读进内存，上限 16 MB（峰值内存约为文件大小的 3 倍，宁可拒绝也不能把进程撑爆）；超过会提示「文件太大」，应用不会崩。http(s) 下载没有这个限制，走系统下载器流式写盘。
 - 若将来 ZCode 的网页客户端开始拒绝 WebView 的 User-Agent，需要在 `MainActivity.setupWebView()` 里改写 `settings.userAgentString`（当前保持默认 UA）。

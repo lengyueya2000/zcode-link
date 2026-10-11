@@ -40,6 +40,7 @@ import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 /**
  * 承载 ZCode 手机远控网页客户端的 WebView 外壳。
@@ -57,11 +58,20 @@ class MainActivity : AppCompatActivity() {
     private var popupWebView: WebView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /** 下载内容的解码与写盘放在后台线程，避免卡主线程。 */
+    private val downloadExecutor = Executors.newSingleThreadExecutor()
+
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
     private companion object {
-        /** blob/data 下载的内存上限（base64 字符数，约合 48 MB 原始数据）。 */
-        const val MAX_IN_MEMORY_DOWNLOAD_CHARS = 64 * 1024 * 1024
+        /**
+         * blob/data 下载的大小上限。这条链路要把内容在内存里过一遍 base64，
+         * 峰值约为文件大小的 3 倍，所以上限按最差的 128 MB 堆来定，宁可拒绝也不要把进程撑爆。
+         */
+        const val MAX_IN_MEMORY_DOWNLOAD_BYTES = 16 * 1024 * 1024
+
+        /** 同上，按 base64 字符数折算的兜底上限。 */
+        const val MAX_IN_MEMORY_DOWNLOAD_CHARS = MAX_IN_MEMORY_DOWNLOAD_BYTES / 3 * 4 + 1024
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -114,6 +124,7 @@ class MainActivity : AppCompatActivity() {
         popupWebView?.let { destroyWebView(it) }
         popupWebView = null
         destroyWebView(binding.webView)
+        downloadExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -375,7 +386,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * blob: / data: 的字节只存在于网页内存里，DownloadManager 拿不到，
-     * 因此让页面把内容读成 data URL，经 DownloadBridge 交回宿主落盘。
+     * 因此让页面读成 base64 经 DownloadBridge 交回宿主落盘。
      * 注意 evaluateJavascript 不会等待 Promise，所以结果必须走 JS 接口回传。
      */
     private fun downloadInMemory(url: String, contentDisposition: String?, mimeType: String?) {
@@ -384,13 +395,19 @@ class MainActivity : AppCompatActivity() {
             (async () => {
               try {
                 const blob = await (await fetch(${quoteJs(url)})).blob();
+                // 先在页面里按大小挡掉，避免生成巨型 base64 字符串把应用撑爆
+                if (blob.size > ${MAX_IN_MEMORY_DOWNLOAD_BYTES}) {
+                  ZcDownload.tooLarge();
+                  return;
+                }
                 const dataUrl = await new Promise((resolve, reject) => {
                   const reader = new FileReader();
                   reader.onload = () => resolve(reader.result);
                   reader.onerror = () => reject(reader.error);
                   reader.readAsDataURL(blob);
                 });
-                ZcDownload.save(dataUrl, ${quoteJs(fileName)});
+                // 只传 base64 正文，省掉宿主侧一次整串 substring 拷贝
+                ZcDownload.save(dataUrl.slice(dataUrl.indexOf(',') + 1), ${quoteJs(fileName)});
               } catch (e) {
                 ZcDownload.fail(String(e));
               }
@@ -404,11 +421,24 @@ class MainActivity : AppCompatActivity() {
     private inner class DownloadBridge {
 
         @JavascriptInterface
-        fun save(dataUrl: String, fileName: String) {
+        fun save(base64: String, fileName: String) {
             // JS 接口在 WebView 的 bridge 线程被调用，碰 WebView 必须回到主线程
             mainHandler.post {
                 if (!isTrustedPage()) return@post
-                saveDataUrl(dataUrl, sanitizeFileName(fileName))
+                val name = sanitizeFileName(fileName)
+                // 解码与写盘都在后台线程，别卡住主线程
+                downloadExecutor.execute {
+                    val result = saveBase64(base64, name)
+                    mainHandler.post { announceSave(result, name) }
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun tooLarge() {
+            mainHandler.post {
+                if (!isTrustedPage()) return@post
+                announceSave(SaveResult.TOO_LARGE, null)
             }
         }
 
@@ -417,7 +447,7 @@ class MainActivity : AppCompatActivity() {
         fun fail(message: String) {
             mainHandler.post {
                 if (!isTrustedPage()) return@post
-                toast(getString(R.string.toast_download_failed))
+                announceSave(SaveResult.FAILED, null)
             }
         }
     }
@@ -426,32 +456,26 @@ class MainActivity : AppCompatActivity() {
     private fun isTrustedPage(): Boolean =
         binding.webView.url?.startsWith("https://zcode.z.ai/") == true
 
-    private fun saveDataUrl(dataUrl: String, fileName: String) {
-        try {
-            val comma = dataUrl.indexOf(',')
-            if (comma < 0) throw IllegalArgumentException("malformed data url")
-            val meta = dataUrl.substring(5, comma)
-            val payload = dataUrl.substring(comma + 1)
-            // base64 会把内容放大 ~1/3，超过上限直接拒绝，避免把进程撑爆
-            if (payload.length > MAX_IN_MEMORY_DOWNLOAD_CHARS) {
-                toast(getString(R.string.toast_download_too_large))
-                return
-            }
-            val bytes = if (meta.contains(";base64")) {
-                Base64.decode(payload, Base64.DEFAULT)
-            } else {
-                URLDecoder.decode(payload, "UTF-8").toByteArray(Charsets.UTF_8)
-            }
-            val ok = writeToDownloads(fileName, bytes)
-            toast(
-                getString(
-                    if (ok) R.string.toast_download_saved else R.string.toast_download_failed,
-                    fileName
-                )
-            )
+    private enum class SaveResult { OK, TOO_LARGE, FAILED }
+
+    private fun saveBase64(base64: String, fileName: String): SaveResult {
+        if (base64.length > MAX_IN_MEMORY_DOWNLOAD_CHARS) return SaveResult.TOO_LARGE
+        val bytes = try {
+            Base64.decode(base64, Base64.DEFAULT)
         } catch (_: Exception) {
-            toast(getString(R.string.toast_download_failed))
+            return SaveResult.FAILED
         }
+        return if (writeToDownloads(fileName, bytes)) SaveResult.OK else SaveResult.FAILED
+    }
+
+    private fun announceSave(result: SaveResult, fileName: String?) {
+        val message = when (result) {
+            SaveResult.OK -> getString(R.string.toast_download_saved, fileName.orEmpty())
+            SaveResult.TOO_LARGE ->
+                getString(R.string.toast_download_too_large, MAX_IN_MEMORY_DOWNLOAD_BYTES / 1024 / 1024)
+            SaveResult.FAILED -> getString(R.string.toast_download_failed)
+        }
+        toast(message)
     }
 
     private fun writeToDownloads(fileName: String, bytes: ByteArray): Boolean {
