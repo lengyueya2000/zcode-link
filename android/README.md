@@ -47,6 +47,8 @@ gradle assembleDebug      # 调试包，输出 app/build/outputs/apk/debug/app-d
 gradle assembleRelease    # 正式包，输出 app/build/outputs/apk/release/app-release.apk
 ```
 
+正式包启用了 R8 代码压缩与资源收缩（`isMinifyEnabled` / `isShrinkResources`），体积约为未压缩时的一半以下。
+
 也可以在 Android Studio 里直接打开 `G:\zcode\tgg\android` 目录构建。
 
 `local.properties` 里的 `sdk.dir` 指向本机 SDK；换机器时改这一行，或删掉它、改用 `ANDROID_HOME` 环境变量。

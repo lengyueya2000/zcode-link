@@ -9,8 +9,11 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Message
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
@@ -41,6 +44,10 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private var currentUrl: String? = null
+
+    /** 接住 window.open 的临时 WebView；用完即销毁，避免每次弹窗残留一个重对象。 */
+    private var popupWebView: WebView? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
@@ -83,8 +90,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        // 让登录态/会话 cookie 落盘，重启后不必重新配对
-        CookieManager.getInstance().flush()
+        // 让登录态/会话 cookie 落盘，重启后不必重新配对。
+        // flush() 会做磁盘写入，放到后台线程，避免切换前后台时卡主线程。
+        val cookies = CookieManager.getInstance()
+        Thread { runCatching { cookies.flush() } }.start()
+    }
+
+    override fun onDestroy() {
+        // 释放 WebView 及其渲染进程，否则进程存活期间会一直占着内存。
+        popupWebView?.let { destroyWebView(it) }
+        popupWebView = null
+        destroyWebView(binding.webView)
+        super.onDestroy()
     }
 
     // ---------------------------------------------------------------- 初始化
@@ -201,26 +218,63 @@ class MainActivity : AppCompatActivity() {
                 isUserGesture: Boolean,
                 resultMsg: Message?
             ): Boolean {
-                // 新窗口请求（OAuth 等）改为在当前 WebView 打开，避免弹出无法操作的空白窗
+                // 新窗口请求（target=_blank / window.open）仍在当前 WebView 打开：
+                // 用一个临时 WebView 接住首次导航，转交主 WebView 后立即销毁。
                 val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                popupWebView?.let { destroyWebView(it) }
+
                 val popup = WebView(this@MainActivity)
+                popupWebView = popup
                 popup.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(
                         v: WebView?,
                         request: WebResourceRequest?
-                    ): Boolean {
-                        val uri = request?.url ?: return false
-                        if (uri.scheme == "http" || uri.scheme == "https") {
-                            binding.webView.loadUrl(uri.toString())
-                            return true
-                        }
-                        return false
+                    ): Boolean = handOffPopup(request?.url)
+
+                    @Deprecated("minSdk 24 上仍可能被回调")
+                    override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean =
+                        url != null && handOffPopup(Uri.parse(url))
+
+                    override fun onPageStarted(v: WebView?, url: String?, favicon: Bitmap?) {
+                        // 兜底：个别实现不会为弹窗首帧回调 shouldOverrideUrlLoading
+                        if (url != null) handOffPopup(Uri.parse(url))
                     }
                 }
                 transport.webView = popup
                 resultMsg.sendToTarget()
                 return true
             }
+        }
+    }
+
+    /**
+     * 把弹窗里的导航转交主 WebView，并销毁这个临时 WebView。
+     * @return true 表示已接管，阻止弹窗自身继续加载
+     */
+    private fun handOffPopup(uri: Uri?): Boolean {
+        val popup = popupWebView ?: return false
+        if (uri == null) return false
+        popupWebView = null // 立即置空，避免 onPageStarted 兜底把同一地址加载两次
+        val scheme = uri.scheme.orEmpty()
+        if (scheme == "http" || scheme == "https") {
+            binding.webView.loadUrl(uri.toString())
+        } else {
+            handleUrl(uri)
+        }
+        // 在弹窗自身的回调栈里直接 destroy 可能抛异常，挪到下一帧执行
+        mainHandler.post { destroyWebView(popup) }
+        return true
+    }
+
+    private fun destroyWebView(web: WebView) {
+        if (popupWebView === web) popupWebView = null
+        runCatching {
+            web.stopLoading()
+            web.webChromeClient = null
+            web.webViewClient = WebViewClient()
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.removeAllViews()
+            web.destroy()
         }
     }
 
