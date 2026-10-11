@@ -30,7 +30,7 @@ https://zcode.z.ai/remote/v4?sid=…&hash=…&t=…&mid=…&name=PC01&app_versio
 | 链接直达 | 点 `zcode.z.ai` 链接可直接用本应用打开 |
 | 地址历史 | 最多 20 条，显示设备名、sid、生成时间；可切换与删除 |
 | 地址校验 | 校验域名/路径/sid/hash，不合规会明确提示 |
-| 文件下载 | 页面里的下载链接能真正保存：http(s) 交给系统下载器（自动带上登录 cookie），blob/data 由应用落盘；统一存到「下载」目录 |
+| 文件下载 | 点页面里的下载链接会交给系统默认浏览器下载（http/https）；网页内存里生成的 blob/data 内容由应用直接落盘到「下载」目录 |
 | 自动恢复 | 记住上次地址，重开即自动连接 |
 
 ## 环境要求
@@ -79,7 +79,8 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 
 - 连接地址里的 `hash` 是连接凭据，本应用只把它发往 `zcode.z.ai`，不写入日志、不发给任何第三方。
 - WebView 关闭了本地文件访问（`allowFileAccess=false`、`allowContentAccess=false`）。网页内容无法调用原生能力，只有一个例外：`ZcDownload` 这个 JS 接口，仅用于把 blob/data 下载的内容交回应用写文件；它会校验当前页面确实来自 `zcode.z.ai`、清洗文件名、并限制大小（16 MB）。
-- 下载文件由应用直接写入系统「下载」目录（Android 10+ 走 MediaStore），不额外申请存储权限。
+- http/https 的下载请求交给系统默认浏览器，本应用不接管；应用自身也声明了 `zcode.z.ai` 的打开方式，所以挑浏览器时会用 `http://` 地址探测并按包名定向，避免 intent 被解析回自己。
+- blob/data 下载由应用直接写入系统「下载」目录（Android 10+ 走 MediaStore），不额外申请存储权限。
 - 混合内容禁止（`MIXED_CONTENT_NEVER_ALLOW`），证书异常一律拒绝，不提供绕过入口。
 - 仅声明 `INTERNET` 与 `ACCESS_NETWORK_STATE` 权限；`allowBackup=false`，应用数据（含地址历史）不参与云备份。
 
@@ -87,10 +88,11 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 
 在 Android 14（API 34，x86_64）模拟器上实测：应用启动、加载真实连接地址、ZCode 网页客户端完整渲染并成功连上桌面端（能列出电脑上的工作区与任务列表），地址解析与设备名（PC01）显示正确，无崩溃。
 
-下载同样实测通过：http(s) 附件经系统下载器保存到「下载」目录、blob 内容经 JS 接口落盘，文件名与内容均正确。
+下载同样实测通过：点下载链接后由系统默认浏览器（`com.android.browser`）接走并成功下载，随后进入系统安装器，本应用没有被回环拉起、无崩溃；blob 内容经 JS 接口落盘，文件名与内容均正确。
 
 ## 已知限制
 
 - 必须联网；连接地址失效时网页客户端会提示「手机连接已失效」，此时回到电脑端重新生成地址再粘贴即可。
-- blob/data 形式的下载需要先把内容读进内存，上限 16 MB（峰值内存约为文件大小的 3 倍，宁可拒绝也不能把进程撑爆）；超过会提示「文件太大」，应用不会崩。http(s) 下载没有这个限制，走系统下载器流式写盘。
+- blob/data 形式的下载需要先把内容读进内存，上限 16 MB（峰值内存约为文件大小的 3 倍，宁可拒绝也不能把进程撑爆）；超过会提示「文件太大」，应用不会崩。http(s) 下载没有这个限制，交给系统浏览器处理。
+- 交给浏览器下载时用的是浏览器自己的会话，**不带 WebView 里的登录态**。ZCode 附件通常是带签名/时效的直接下载地址，实测可正常下载；但如果某个下载地址依赖 WebView 的 cookie，浏览器里可能会失败。
 - 若将来 ZCode 的网页客户端开始拒绝 WebView 的 User-Agent，需要在 `MainActivity.setupWebView()` 里改写 `settings.userAgentString`（当前保持默认 UA）。

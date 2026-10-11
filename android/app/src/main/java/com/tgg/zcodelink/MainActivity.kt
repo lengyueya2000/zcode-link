@@ -1,12 +1,12 @@
 package com.tgg.zcodelink
 
 import android.annotation.SuppressLint
-import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
@@ -193,8 +193,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         // WebView 自己不会下载：不注册这个回调，点击下载链接会毫无反应。
-        web.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-            startDownload(url, userAgent, contentDisposition, mimeType)
+        web.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
+            startDownload(url, contentDisposition, mimeType)
         }
 
         // 仅用于把 blob:/data: 的字节从页面取回宿主（见 DownloadBridge 的来源校验）。
@@ -257,8 +257,8 @@ class MainActivity : AppCompatActivity() {
 
                 val popup = WebView(this@MainActivity)
                 popupWebView = popup
-                popup.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                    startDownload(url, userAgent, contentDisposition, mimeType)
+                popup.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
+                    startDownload(url, contentDisposition, mimeType)
                 }
                 popup.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(
@@ -300,7 +300,7 @@ class MainActivity : AppCompatActivity() {
     private fun routeUri(uri: Uri) {
         when (uri.scheme.orEmpty().lowercase()) {
             "http", "https" -> binding.webView.loadUrl(uri.toString())
-            "blob", "data" -> startDownload(uri.toString(), null, null, null)
+            "blob", "data" -> startDownload(uri.toString(), null, null)
             else -> handleUrl(uri)
         }
     }
@@ -322,7 +322,7 @@ class MainActivity : AppCompatActivity() {
         val scheme = uri.scheme.orEmpty().lowercase()
         if (scheme == "http" || scheme == "https") return false // 站内一律留在 WebView
         if (scheme == "blob" || scheme == "data") {
-            startDownload(uri.toString(), null, null, null) // 网页用 blob/data 触发的下载
+            startDownload(uri.toString(), null, null) // 网页用 blob/data 触发的下载
             return true
         }
         return try {
@@ -337,51 +337,49 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * WebView 不会自己保存文件，必须由宿主接管下载请求，否则点击下载链接毫无反应。
-     * http(s) 交给系统 DownloadManager；blob/data（网页内存里生成的）先取回字节再落盘。
+     * http(s) 交给系统默认浏览器下载（不受内存与大小限制）；
+     * blob/data 的字节只存在于网页内存里，外部浏览器取不到，只能由本应用落盘。
      */
     private fun startDownload(
         url: String,
-        userAgent: String?,
         contentDisposition: String?,
         mimeType: String?
     ) {
         when (Uri.parse(url).scheme.orEmpty().lowercase()) {
-            "http", "https" -> downloadToSystem(url, userAgent, contentDisposition, mimeType)
+            "http", "https" -> openInBrowser(url)
             "blob", "data" -> downloadInMemory(url, contentDisposition, mimeType)
             else -> toast(getString(R.string.toast_download_unsupported))
         }
     }
 
-    private fun downloadToSystem(
-        url: String,
-        userAgent: String?,
-        contentDisposition: String?,
-        mimeType: String?
-    ) {
-        val fileName = guessFileName(url, contentDisposition, mimeType)
-        try {
-            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                setTitle(fileName)
-                setMimeType(mimeType)
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    // Android 10+ 写公共「下载」目录不需要任何权限
-                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-                } else {
-                    // 旧版本改存应用专属目录，同样免权限
-                    setDestinationInExternalFilesDir(
-                        this@MainActivity, Environment.DIRECTORY_DOWNLOADS, fileName
-                    )
-                }
-                userAgent?.let { addRequestHeader("User-Agent", it) }
-                // 带上会话 cookie，否则需要登录的附件会下成 401/403 页面
-                CookieManager.getInstance().getCookie(url)?.let { addRequestHeader("Cookie", it) }
-            }
-            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            toast(getString(R.string.toast_downloading, fileName))
-        } catch (_: Exception) {
-            toast(getString(R.string.toast_download_failed))
+    /** 交给系统默认浏览器下载。 */
+    private fun openInBrowser(url: String) {
+        val browser = defaultBrowserPackage()
+        if (browser == null) {
+            toast(getString(R.string.toast_no_browser))
+            return
         }
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addCategory(Intent.CATEGORY_BROWSABLE)
+            .setPackage(browser)
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            toast(getString(R.string.toast_no_browser))
+        }
+    }
+
+    /**
+     * 本应用自己声明了 `https://zcode.z.ai` 的 VIEW 过滤器，直接 ACTION_VIEW 会被解析回
+     * 本应用（singleTask → onNewIntent）形成回环，所以先用一个 http 地址问出默认浏览器。
+     */
+    private fun defaultBrowserPackage(): String? {
+        val probe = Intent(Intent.ACTION_VIEW, Uri.parse("http://zcode.z.ai/"))
+            .addCategory(Intent.CATEGORY_BROWSABLE)
+        return packageManager
+            .resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo?.packageName
+            ?.takeIf { it != packageName }
     }
 
     /**

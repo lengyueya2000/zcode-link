@@ -39,6 +39,7 @@
     <string name="toast_download_failed">下载失败</string>
     <string name="toast_download_too_large">文件太大，无法保存（上限 %1$d MB）</string>
     <string name="toast_download_unsupported">不支持这种下载链接</string>
+    <string name="toast_no_browser">没有找到可用的浏览器，无法下载</string>
 
     <string name="load_failed">页面加载失败，请检查网络或地址是否仍然有效。</string>
     <string name="action_retry">重试</string>
