@@ -34,6 +34,12 @@
     <string name="toast_deleted">已删除</string>
     <string name="toast_no_address">还没有连接地址</string>
 
+    <string name="toast_downloading">已开始下载：%1$s</string>
+    <string name="toast_download_saved">已保存到「下载」：%1$s</string>
+    <string name="toast_download_failed">下载失败</string>
+    <string name="toast_download_too_large">文件太大，无法保存</string>
+    <string name="toast_download_unsupported">不支持这种下载链接</string>
+
     <string name="load_failed">页面加载失败，请检查网络或地址是否仍然有效。</string>
     <string name="action_retry">重试</string>
     <string name="action_reenter">更换地址</string>

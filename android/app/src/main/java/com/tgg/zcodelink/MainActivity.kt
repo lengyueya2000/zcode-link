@@ -1,20 +1,25 @@
 package com.tgg.zcodelink
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -29,6 +34,9 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.tgg.zcodelink.databinding.ActivityMainBinding
 import com.tgg.zcodelink.databinding.ItemAddressBinding
 import com.tgg.zcodelink.databinding.SheetAddressBinding
+import java.io.File
+import java.io.FileOutputStream
+import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,6 +58,11 @@ class MainActivity : AppCompatActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+
+    private companion object {
+        /** blob/data 下载的内存上限（base64 字符数，约合 48 MB 原始数据）。 */
+        const val MAX_IN_MEMORY_DOWNLOAD_CHARS = 64 * 1024 * 1024
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -168,6 +181,14 @@ class MainActivity : AppCompatActivity() {
             setAcceptThirdPartyCookies(web, true)
         }
 
+        // WebView 自己不会下载：不注册这个回调，点击下载链接会毫无反应。
+        web.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+            startDownload(url, userAgent, contentDisposition, mimeType)
+        }
+
+        // 仅用于把 blob:/data: 的字节从页面取回宿主（见 DownloadBridge 的来源校验）。
+        web.addJavascriptInterface(DownloadBridge(), "ZcDownload")
+
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
@@ -225,6 +246,9 @@ class MainActivity : AppCompatActivity() {
 
                 val popup = WebView(this@MainActivity)
                 popupWebView = popup
+                popup.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                    startDownload(url, userAgent, contentDisposition, mimeType)
+                }
                 popup.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(
                         v: WebView?,
@@ -255,15 +279,19 @@ class MainActivity : AppCompatActivity() {
         val popup = popupWebView ?: return false
         if (uri == null) return false
         popupWebView = null // 立即置空，避免 onPageStarted 兜底把同一地址加载两次
-        val scheme = uri.scheme.orEmpty()
-        if (scheme == "http" || scheme == "https") {
-            binding.webView.loadUrl(uri.toString())
-        } else {
-            handleUrl(uri)
-        }
+        routeUri(uri)
         // 在弹窗自身的回调栈里直接 destroy 可能抛异常，挪到下一帧执行
         mainHandler.post { destroyWebView(popup) }
         return true
+    }
+
+    /** 站内页面留在主 WebView；blob/data 交给下载；其余交给系统。 */
+    private fun routeUri(uri: Uri) {
+        when (uri.scheme.orEmpty().lowercase()) {
+            "http", "https" -> binding.webView.loadUrl(uri.toString())
+            "blob", "data" -> startDownload(uri.toString(), null, null, null)
+            else -> handleUrl(uri)
+        }
     }
 
     private fun destroyWebView(web: WebView) {
@@ -280,8 +308,12 @@ class MainActivity : AppCompatActivity() {
 
     /** @return true 表示已由本方法处理（不再交给 WebView 自行加载） */
     private fun handleUrl(uri: Uri): Boolean {
-        val scheme = uri.scheme.orEmpty()
+        val scheme = uri.scheme.orEmpty().lowercase()
         if (scheme == "http" || scheme == "https") return false // 站内一律留在 WebView
+        if (scheme == "blob" || scheme == "data") {
+            startDownload(uri.toString(), null, null, null) // 网页用 blob/data 触发的下载
+            return true
+        }
         return try {
             startActivity(Intent(Intent.ACTION_VIEW, uri))
             true
@@ -289,6 +321,219 @@ class MainActivity : AppCompatActivity() {
             true
         }
     }
+
+    // ---------------------------------------------------------------- 下载
+
+    /**
+     * WebView 不会自己保存文件，必须由宿主接管下载请求，否则点击下载链接毫无反应。
+     * http(s) 交给系统 DownloadManager；blob/data（网页内存里生成的）先取回字节再落盘。
+     */
+    private fun startDownload(
+        url: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?
+    ) {
+        when (Uri.parse(url).scheme.orEmpty().lowercase()) {
+            "http", "https" -> downloadToSystem(url, userAgent, contentDisposition, mimeType)
+            "blob", "data" -> downloadInMemory(url, contentDisposition, mimeType)
+            else -> toast(getString(R.string.toast_download_unsupported))
+        }
+    }
+
+    private fun downloadToSystem(
+        url: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?
+    ) {
+        val fileName = guessFileName(url, contentDisposition, mimeType)
+        try {
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                setTitle(fileName)
+                setMimeType(mimeType)
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // Android 10+ 写公共「下载」目录不需要任何权限
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                } else {
+                    // 旧版本改存应用专属目录，同样免权限
+                    setDestinationInExternalFilesDir(
+                        this@MainActivity, Environment.DIRECTORY_DOWNLOADS, fileName
+                    )
+                }
+                userAgent?.let { addRequestHeader("User-Agent", it) }
+                // 带上会话 cookie，否则需要登录的附件会下成 401/403 页面
+                CookieManager.getInstance().getCookie(url)?.let { addRequestHeader("Cookie", it) }
+            }
+            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            toast(getString(R.string.toast_downloading, fileName))
+        } catch (_: Exception) {
+            toast(getString(R.string.toast_download_failed))
+        }
+    }
+
+    /**
+     * blob: / data: 的字节只存在于网页内存里，DownloadManager 拿不到，
+     * 因此让页面把内容读成 data URL，经 DownloadBridge 交回宿主落盘。
+     * 注意 evaluateJavascript 不会等待 Promise，所以结果必须走 JS 接口回传。
+     */
+    private fun downloadInMemory(url: String, contentDisposition: String?, mimeType: String?) {
+        val fileName = guessFileName(url, contentDisposition, mimeType)
+        val script = """
+            (async () => {
+              try {
+                const blob = await (await fetch(${quoteJs(url)})).blob();
+                const dataUrl = await new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.onerror = () => reject(reader.error);
+                  reader.readAsDataURL(blob);
+                });
+                ZcDownload.save(dataUrl, ${quoteJs(fileName)});
+              } catch (e) {
+                ZcDownload.fail(String(e));
+              }
+            })()
+        """.trimIndent()
+        binding.webView.evaluateJavascript(script, null)
+        toast(getString(R.string.toast_downloading, fileName))
+    }
+
+    /** 网页侧回传下载内容的唯一入口；只接受来自 ZCode 页面本身的调用。 */
+    private inner class DownloadBridge {
+
+        @JavascriptInterface
+        fun save(dataUrl: String, fileName: String) {
+            // JS 接口在 WebView 的 bridge 线程被调用，碰 WebView 必须回到主线程
+            mainHandler.post {
+                if (!isTrustedPage()) return@post
+                saveDataUrl(dataUrl, sanitizeFileName(fileName))
+            }
+        }
+
+        @JavascriptInterface
+        @Suppress("UNUSED_PARAMETER")
+        fun fail(message: String) {
+            mainHandler.post {
+                if (!isTrustedPage()) return@post
+                toast(getString(R.string.toast_download_failed))
+            }
+        }
+    }
+
+    /** JS 接口对所有 frame 可见，用主文档来源兜底，避免被第三方内容调用。 */
+    private fun isTrustedPage(): Boolean =
+        binding.webView.url?.startsWith("https://zcode.z.ai/") == true
+
+    private fun saveDataUrl(dataUrl: String, fileName: String) {
+        try {
+            val comma = dataUrl.indexOf(',')
+            if (comma < 0) throw IllegalArgumentException("malformed data url")
+            val meta = dataUrl.substring(5, comma)
+            val payload = dataUrl.substring(comma + 1)
+            // base64 会把内容放大 ~1/3，超过上限直接拒绝，避免把进程撑爆
+            if (payload.length > MAX_IN_MEMORY_DOWNLOAD_CHARS) {
+                toast(getString(R.string.toast_download_too_large))
+                return
+            }
+            val bytes = if (meta.contains(";base64")) {
+                Base64.decode(payload, Base64.DEFAULT)
+            } else {
+                URLDecoder.decode(payload, "UTF-8").toByteArray(Charsets.UTF_8)
+            }
+            val ok = writeToDownloads(fileName, bytes)
+            toast(
+                getString(
+                    if (ok) R.string.toast_download_saved else R.string.toast_download_failed,
+                    fileName
+                )
+            )
+        } catch (_: Exception) {
+            toast(getString(R.string.toast_download_failed))
+        }
+    }
+
+    private fun writeToDownloads(fileName: String, bytes: ByteArray): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                    put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val resolver = contentResolver
+                val uri = resolver.insert(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                )
+                if (uri == null) {
+                    false
+                } else {
+                    val stream = resolver.openOutputStream(uri)
+                    if (stream == null) {
+                        false
+                    } else {
+                        stream.use { it.write(bytes) }
+                        values.clear()
+                        values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+                        resolver.update(uri, values, null, null)
+                        true
+                    }
+                }
+            } else {
+                val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                if (dir == null) {
+                    false
+                } else {
+                    if (!dir.exists()) dir.mkdirs()
+                    FileOutputStream(File(dir, fileName)).use { it.write(bytes) }
+                    true
+                }
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 从 Content-Disposition 或 URL 末段推断文件名，兜底用 mime 扩展名。 */
+    private fun guessFileName(url: String, contentDisposition: String?, mimeType: String?): String {
+        val fromHeader = contentDisposition?.let {
+            Regex("filename\\*?=(?:UTF-8''|\")?([^\";]+)", RegexOption.IGNORE_CASE)
+                .find(it)?.groupValues?.get(1)
+        }
+        if (!fromHeader.isNullOrBlank()) return sanitizeFileName(decodeUrl(fromHeader))
+
+        val last = Uri.parse(url).path?.substringAfterLast('/')
+        if (!last.isNullOrBlank()) {
+            val name = sanitizeFileName(decodeUrl(last))
+            if (name.contains('.')) return name
+            return extensionFor(mimeType)?.let { "$name.$it" } ?: name
+        }
+        return extensionFor(mimeType)?.let { "download.$it" } ?: "download"
+    }
+
+    private fun extensionFor(mimeType: String?): String? =
+        android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+
+    private fun decodeUrl(text: String): String = try {
+        URLDecoder.decode(text.trim(), "UTF-8")
+    } catch (_: Exception) {
+        text.trim()
+    }
+
+    private fun sanitizeFileName(name: String): String {
+        val cleaned = name
+            .replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_")
+            .trim()
+            .trimStart('.')
+            .take(120)
+        return cleaned.ifBlank { "download" }
+    }
+
+    /** 把字符串安全地嵌进注入的 JS 单引号字面量里。 */
+    private fun quoteJs(text: String): String = "'" +
+        text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r") +
+        "'"
 
     // ---------------------------------------------------------------- 状态
 
